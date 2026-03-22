@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 import joblib
 import matplotlib.pyplot as plt
 import mlflow
+import mlflow.data
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
@@ -28,7 +30,7 @@ from sklearn.metrics import (
     roc_auc_score,
     RocCurveDisplay,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -71,6 +73,62 @@ class TrainingResult:
     top_coefficients: pd.DataFrame
     model_path: Path
     metadata_path: Path
+
+
+def git_commit_hash() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return "unknown"
+    return result.stdout.strip() or "unknown"
+
+
+def dvc_metadata_for_dataset(dataset_path: Path) -> dict[str, str]:
+    dvc_path = dataset_path.with_name(f"{dataset_path.name}.dvc")
+    if not dvc_path.exists():
+        return {
+            "dataset_dvc_file": "missing",
+            "dataset_dvc_hash_name": "missing",
+            "dataset_dvc_hash_value": "missing",
+            "dataset_dvc_tracked_relpath": "missing",
+        }
+
+    # DVC `.dvc` files are YAML-like but simple enough here to parse line by line.
+    hash_name = "unknown"
+    hash_value = "unknown"
+    tracked_relpath = "unknown"
+
+    for raw_line in dvc_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("- md5:"):
+            hash_name = "md5"
+            hash_value = line.split(":", 1)[1].strip()
+        elif line.startswith("md5:"):
+            hash_name = "md5"
+            hash_value = line.split(":", 1)[1].strip()
+        elif line.startswith("hash:"):
+            hash_name = line.split(":", 1)[1].strip()
+        elif line.startswith("path:"):
+            tracked_relpath = line.split(":", 1)[1].strip()
+
+    return {
+        "dataset_dvc_file": str(dvc_path),
+        "dataset_dvc_hash_name": hash_name,
+        "dataset_dvc_hash_value": hash_value,
+        "dataset_dvc_tracked_relpath": tracked_relpath,
+    }
+
+
+def dataset_digest_for_mlflow(dataset_hash: str, dvc_metadata: dict[str, str]) -> str:
+    dvc_hash_value = dvc_metadata.get("dataset_dvc_hash_value", "missing")
+    if dvc_hash_value not in {"missing", "unknown"} and len(dvc_hash_value) <= 36:
+        return dvc_hash_value
+    return dataset_hash[:36]
 
 
 def configure_mlflow(
@@ -159,6 +217,34 @@ def top_coefficients_dataframe(model: Pipeline, limit: int = 15) -> pd.DataFrame
         .sort_values("abs_coef", ascending=False)
         .head(limit)
     )
+
+
+def cross_validation_metrics(X_train: pd.DataFrame, y_train: pd.Series) -> dict[str, float]:
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    scoring = {
+        "roc_auc": "roc_auc",
+        "f1": "f1",
+        "precision": "precision",
+        "recall": "recall",
+    }
+    cv_results = cross_validate(
+        build_pipeline(X_train),
+        X_train,
+        y_train,
+        cv=cv,
+        scoring=scoring,
+        n_jobs=None,
+    )
+    return {
+        "cv_roc_auc_mean": float(np.mean(cv_results["test_roc_auc"])),
+        "cv_roc_auc_std": float(np.std(cv_results["test_roc_auc"])),
+        "cv_f1_mean": float(np.mean(cv_results["test_f1"])),
+        "cv_f1_std": float(np.std(cv_results["test_f1"])),
+        "cv_precision_mean": float(np.mean(cv_results["test_precision"])),
+        "cv_precision_std": float(np.std(cv_results["test_precision"])),
+        "cv_recall_mean": float(np.mean(cv_results["test_recall"])),
+        "cv_recall_std": float(np.std(cv_results["test_recall"])),
+    }
 
 
 def save_figures(
@@ -262,6 +348,10 @@ def train_variant(
     include_tenure_group: bool,
     output_dir: Path,
 ) -> TrainingResult:
+    dvc_metadata = dvc_metadata_for_dataset(dataset_path)
+    dataset_digest = dataset_digest_for_mlflow(dataset_hash, dvc_metadata)
+    commit_hash = git_commit_hash()
+
     model_frame = build_model_frame(
         dataframe,
         include_tenure_group=include_tenure_group,
@@ -269,6 +359,8 @@ def train_variant(
     )
     X = model_frame.drop(columns=["Churn", TARGET_COLUMN])
     y = model_frame[TARGET_COLUMN]
+    training_dataset_df = X.copy()
+    training_dataset_df[TARGET_COLUMN] = y
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
@@ -279,6 +371,7 @@ def train_variant(
     )
 
     model = build_pipeline(X_train)
+    cv_metrics = cross_validation_metrics(X_train, y_train)
 
     with mlflow.start_run(experiment_id=experiment_id, run_name=f"logreg_{variant_name}") as run:
         mlflow.set_tags(
@@ -287,20 +380,42 @@ def train_variant(
                 "model_family": "logistic_regression",
                 "feature_variant": variant_name,
                 "include_tenure_group": str(include_tenure_group).lower(),
+                "git_commit": commit_hash,
+                "dataset_dvc_file": dvc_metadata["dataset_dvc_file"],
+                "dataset_dvc_hash_name": dvc_metadata["dataset_dvc_hash_name"],
+                "dataset_dvc_hash_value": dvc_metadata["dataset_dvc_hash_value"],
             }
         )
         mlflow.log_params(
             {
                 "dataset_hash": dataset_hash,
                 "dataset_path": str(dataset_path),
+                "dataset_dvc_tracked_relpath": dvc_metadata["dataset_dvc_tracked_relpath"],
                 "test_size": 0.2,
                 "random_state": 42,
                 "classifier": "LogisticRegression",
                 "classifier__max_iter": 2000,
                 "classifier__class_weight": "balanced",
+                "cv_fold_count": 5,
                 "numeric_feature_count": len(X_train.select_dtypes(include=["number"]).columns),
                 "categorical_feature_count": len(X_train.select_dtypes(exclude=["number"]).columns),
             }
+        )
+        mlflow_dataset = mlflow.data.from_pandas(
+            training_dataset_df,
+            source=dataset_path.resolve().as_uri(),
+            targets=TARGET_COLUMN,
+            name=f"telco_churn_{variant_name}",
+            digest=dataset_digest,
+        )
+        mlflow.log_input(
+            mlflow_dataset,
+            context="training",
+            tags={
+                "feature_variant": variant_name,
+                "dataset_dvc_hash_name": dvc_metadata["dataset_dvc_hash_name"],
+                "dataset_dvc_hash_value": dvc_metadata["dataset_dvc_hash_value"],
+            },
         )
 
         model.fit(X_train, y_train)
@@ -325,6 +440,7 @@ def train_variant(
             "best_threshold_recall": float(best_threshold_row["recall"]),
             "best_threshold_f1": float(best_threshold_row["f1"]),
         }
+        metrics.update(cv_metrics)
         mlflow.log_metrics(metrics)
 
         top_coefficients = top_coefficients_dataframe(model)
@@ -378,6 +494,8 @@ def comparison_table(results: list[TrainingResult]) -> pd.DataFrame:
                 "churn_precision": result.metrics["churn_precision"],
                 "churn_recall": result.metrics["churn_recall"],
                 "churn_f1": result.metrics["churn_f1"],
+                "cv_roc_auc_mean": result.metrics["cv_roc_auc_mean"],
+                "cv_f1_mean": result.metrics["cv_f1_mean"],
                 "best_threshold_by_f1": result.metrics["best_threshold_by_f1"],
             }
             for result in results

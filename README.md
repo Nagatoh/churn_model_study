@@ -4,9 +4,11 @@ Este projeto saiu do estagio de notebook unico e agora tem uma base reproduzivel
 
 - treinar modelos fora do notebook
 - comparar variantes no MLflow
+- validar o dataset com DVC e rastrear a versao usada no treino
 - promover um modelo para producao local
 - executar inferencia batch
 - servir previsoes via API
+- testar os componentes criticos em CI
 
 O notebook continua util para exploracao em `notebooks/01_hypothesis_screening.ipynb`, mas o fluxo principal agora comeca em `src/`.
 
@@ -20,8 +22,11 @@ O notebook continua util para exploracao em `notebooks/01_hypothesis_screening.i
 - `src/churn_model/predict.py`: CLI de inferencia batch
 - `src/churn_model/api.py`: API FastAPI
 - `src/churn_model/serve.py`: CLI para subir a API
+- `tests/`: testes minimos de transformacao, inferencia e API
+- `.github/workflows/ci.yml`: pipeline de validacao no GitHub Actions
 - `artifacts/models/`: modelo promovido para uso operacional
 - `mlflow.db` e `mlartifacts/`: tracking local do MLflow
+- `data/*.dvc`: ponteiro DVC para a versao do dataset
 
 ## Setup com uv
 
@@ -44,6 +49,7 @@ O comando abaixo:
 3. registra as duas no MLflow
 4. compara `with_tenure_group` vs `without_tenure_group`
 5. promove uma delas para `artifacts/models/churn_model.joblib`
+6. registra metricas de validacao cruzada no MLflow
 
 ```powershell
 uv run churn-train
@@ -69,12 +75,18 @@ Cada run registra:
 
 - variante do modelo
 - hash `sha256` do dataset
+- metadados do arquivo `.dvc` e commit Git
+- dataset no campo nativo `Datasets` do MLflow
 - metricas principais
+- metricas medias e desvio padrao de validacao cruzada
 - melhor threshold por `f1`
 - figuras de avaliacao
 - modelo `sklearn` logado no experimento
 
-Isso nao substitui DVC, mas ja cria rastreabilidade suficiente para comparar experimentos sem depender do notebook.
+MLflow e DVC se complementam aqui:
+
+- DVC controla a versao do dataset
+- MLflow guarda experimento, metricas, artefatos e a referencia ao dataset usado
 
 ## MLflow local
 
@@ -106,6 +118,20 @@ Observacao:
 - o script espera as colunas de entrada cruas do cliente
 - `customerID` e `Churn` nao sao necessarios
 - o preprocessamento correto e reaplicado automaticamente
+
+## Testes
+
+Para validar os componentes principais localmente:
+
+```powershell
+uv run pytest
+```
+
+Os testes cobrem:
+
+- preparacao de dados
+- inferencia com artifact promovido
+- endpoints principais da API
 
 ## API de previsao
 
@@ -153,8 +179,7 @@ Importante:
 
 Com essa base pronta, a sequencia mais natural e:
 
-1. adicionar validacao cruzada ao pipeline de treino
-2. incluir XGBoost ou LightGBM no mesmo fluxo de MLflow
-3. adicionar testes para preprocessamento e inferencia
-4. introduzir DVC se quiser versionamento formal de dados
-5. colocar a API em CI/CD e deploy
+1. incluir XGBoost ou LightGBM no mesmo fluxo de MLflow
+2. adicionar testes de contrato para payloads invalidos e regressao de metricas
+3. trocar o remote local do DVC por um storage compartilhado
+4. colocar build e deploy automatizados para a API
