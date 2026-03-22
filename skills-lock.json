@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "machine-learning-engineer": {
+      "source": "404kidwiz/claude-supercode-skills",
+      "sourceType": "github",
+      "computedHash": "9ee82bcdf7af1efce0672befbf37187806dcd31f11a54284489b79b15b1265fb"
+    },
+    "machine-learning-ops-ml-pipeline": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "50287227d8087102b594719c2e43d99c00f17c34f250e32d118e391bd48cb4c9"
+    }
+  }
+}
