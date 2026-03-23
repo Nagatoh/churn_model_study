@@ -39,7 +39,7 @@ def test_predict_endpoint_returns_model_response(
                 churn_probability=0.83,
                 churn_prediction=1,
                 threshold=0.55,
-                variant_name="without_tenure_group",
+                variant_name="logreg_without_tenure_group",
                 dataset_hash="abc123",
             )
         ]
@@ -51,4 +51,42 @@ def test_predict_endpoint_returns_model_response(
 
     assert response.status_code == 200
     assert response.json()["churn_prediction"] == 1
-    assert response.json()["variant_name"] == "without_tenure_group"
+    assert response.json()["variant_name"] == "logreg_without_tenure_group"
+
+
+def test_predict_endpoint_rejects_missing_required_field(
+    sample_customer_record: dict[str, object],
+) -> None:
+    client = TestClient(api.app)
+    invalid_payload = sample_customer_record.copy()
+    invalid_payload.pop("Contract")
+
+    response = client.post("/predict", json=invalid_payload)
+
+    assert response.status_code == 422
+    assert "Contract" in response.text
+
+
+def test_predict_endpoint_rejects_extra_field(
+    sample_customer_record: dict[str, object],
+) -> None:
+    client = TestClient(api.app)
+    invalid_payload = sample_customer_record | {"unexpected_field": "boom"}
+
+    response = client.post("/predict", json=invalid_payload)
+
+    assert response.status_code == 422
+    assert "unexpected_field" in response.text
+
+
+def test_predict_endpoint_rejects_invalid_field_shape(
+    sample_customer_record: dict[str, object],
+) -> None:
+    client = TestClient(api.app)
+    invalid_payload = sample_customer_record.copy()
+    invalid_payload["MonthlyCharges"] = {"value": 29.85}
+
+    response = client.post("/predict", json=invalid_payload)
+
+    assert response.status_code == 422
+    assert "MonthlyCharges" in response.text

@@ -2,8 +2,8 @@
 
 Este projeto saiu do estagio de notebook unico e agora tem uma base reproduzivel para:
 
-- treinar modelos fora do notebook
-- comparar variantes no MLflow
+- treinar o modelo campeao fora do notebook
+- comparar variantes e tuning no fluxo de experimentacao
 - validar o dataset com DVC e rastrear a versao usada no treino
 - promover um modelo para producao local
 - executar inferencia batch
@@ -18,6 +18,7 @@ O notebook continua util para exploracao em `notebooks/01_hypothesis_screening.i
 - `src/churn_model/data.py`: carga, limpeza e preparacao
 - `src/churn_model/training.py`: treino, avaliacao, MLflow e persistencia
 - `src/churn_model/train.py`: CLI de treino
+- `src/churn_model/experiment.py`: CLI de experimentacao com tuning
 - `src/churn_model/inference.py`: reutilizacao do modelo promovido
 - `src/churn_model/predict.py`: CLI de inferencia batch
 - `src/churn_model/api.py`: API FastAPI
@@ -40,27 +41,46 @@ Se quiser abrir o notebook:
 uv run jupyter lab
 ```
 
-## Treino reproduzivel
+## Treino operacional
 
 O comando abaixo:
 
 1. carrega o dataset
-2. treina duas variantes da regressao logistica
-3. registra as duas no MLflow
-4. compara `with_tenure_group` vs `without_tenure_group`
-5. promove uma delas para `artifacts/models/churn_model.joblib`
-6. registra metricas de validacao cruzada no MLflow
+2. treina apenas a variante campea congelada
+3. registra a run no MLflow
+4. promove o artifact para `artifacts/models/churn_model.joblib`
 
 ```powershell
 uv run churn-train
 ```
 
-Por padrao, a variante promovida e `without_tenure_group`.
+Hoje o treino operacional usa a variante fixa `xgboost_with_tenure_group`, com os melhores hiperparametros encontrados no ciclo de experimentacao.
 
-Se quiser promover a outra:
+## Experimentos e tuning
+
+O comando abaixo roda o fluxo mais pesado de comparacao:
+
+1. baseline linear com regularizacao e `GridSearchCV`
+2. `XGBoost` com `RandomizedSearchCV`
+3. comparacao entre familias de modelo e variacoes com ou sem `tenure_group`
+4. promocao automatica da melhor run experimental
 
 ```powershell
-uv run churn-train --selected-variant with_tenure_group
+uv run churn-experiment
+```
+
+Por padrao, a melhor variante experimental e promovida usando `cv_f1_mean`.
+
+Se quiser trocar a metrica de promocao automatica:
+
+```powershell
+uv run churn-experiment --selection-metric roc_auc
+```
+
+Se quiser forcar manualmente uma variante:
+
+```powershell
+uv run churn-experiment --selected-variant xgboost_without_tenure_group
 ```
 
 Se quiser apontar para outro CSV:
@@ -74,14 +94,27 @@ uv run churn-train --dataset-path data/WA_Fn-UseC_-Telco-Customer-Churn.csv
 Cada run registra:
 
 - variante do modelo
+- familia do modelo
+- estrategia de tuning usada
+- melhores hiperparametros encontrados
+- penalidade de regularizacao selecionada no baseline linear
+- contagem de features selecionadas via metodo embutido
 - hash `sha256` do dataset
 - metadados do arquivo `.dvc` e commit Git
 - dataset no campo nativo `Datasets` do MLflow
 - metricas principais
+- `tuning_best_cv_f1` e `tuning_best_cv_roc_auc`
 - metricas medias e desvio padrao de validacao cruzada
 - melhor threshold por `f1`
 - figuras de avaliacao
 - modelo `sklearn` logado no experimento
+
+O artifact promovido para `artifacts/models/churn_model.joblib` tambem recebe metadados de promocao em `artifacts/models/churn_model_metadata.json`, incluindo:
+
+- modo de promocao: automatico ou manual
+- metrica usada na selecao
+- variante promovida
+- timestamp da promocao
 
 MLflow e DVC se complementam aqui:
 
@@ -132,6 +165,9 @@ Os testes cobrem:
 - preparacao de dados
 - inferencia com artifact promovido
 - endpoints principais da API
+- contrato de payload invalido
+- piso minimo de metricas para `LogisticRegression` e `XGBoost`
+- retorno do tuning e da selecao embutida de variaveis
 
 ## API de previsao
 
@@ -151,7 +187,7 @@ A API usa por padrao `artifacts/models/churn_model.joblib`.
 Se quiser apontar para outro artifact:
 
 ```powershell
-uv run churn-serve --model-path artifacts/models/with_tenure_group.joblib
+uv run churn-serve --model-path artifacts/models/xgboost_without_tenure_group.joblib
 ```
 
 ## Docker
@@ -179,7 +215,6 @@ Importante:
 
 Com essa base pronta, a sequencia mais natural e:
 
-1. incluir XGBoost ou LightGBM no mesmo fluxo de MLflow
-2. adicionar testes de contrato para payloads invalidos e regressao de metricas
-3. trocar o remote local do DVC por um storage compartilhado
-4. colocar build e deploy automatizados para a API
+1. adicionar `LightGBM` como terceira familia no mesmo fluxo de tuning
+2. trocar o remote local do DVC por um storage compartilhado
+3. colocar build e deploy automatizados para a API

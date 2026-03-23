@@ -4,18 +4,34 @@ import argparse
 from pathlib import Path
 
 from churn_model.config import DATA_PATH, MLFLOW_EXPERIMENT_NAME, MLFLOW_TRACKING_URI, MODEL_DIR
-from churn_model.training import PRODUCTION_VARIANT, train_production_pipeline
+from churn_model.training import (
+    DEFAULT_SELECTION_METRIC,
+    SELECTION_METRICS,
+    SUPPORTED_VARIANTS,
+    run_experiment_pipeline,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Treina o modelo campeao de churn para uso operacional."
+        description="Executa experimentos de churn com tuning e comparacao de variantes."
     )
     parser.add_argument(
         "--dataset-path",
         type=Path,
         default=DATA_PATH,
-        help="Caminho do CSV de churn usado no treino.",
+        help="Caminho do CSV de churn usado nos experimentos.",
+    )
+    parser.add_argument(
+        "--selected-variant",
+        choices=SUPPORTED_VARIANTS,
+        help="Variante promovida manualmente apos os experimentos. Se omitido, usa a melhor run.",
+    )
+    parser.add_argument(
+        "--selection-metric",
+        default=DEFAULT_SELECTION_METRIC,
+        choices=SELECTION_METRICS,
+        help="Metrica usada para promover automaticamente a melhor run experimental.",
     )
     parser.add_argument(
         "--output-dir",
@@ -39,20 +55,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    result = train_production_pipeline(
+    _, summary = run_experiment_pipeline(
         dataset_path=args.dataset_path,
+        selected_variant=args.selected_variant,
+        selection_metric=args.selection_metric,
         output_dir=args.output_dir,
         tracking_uri=args.tracking_uri,
         experiment_name=args.experiment_name,
     )
-    print("Treino operacional concluido:")
-    print(f"variante={result.variant_name}")
-    print(f"familia={result.model_family}")
-    print(f"roc_auc={result.metrics['roc_auc']:.6f}")
-    print(f"churn_f1={result.metrics['churn_f1']:.6f}")
-    print(f"cv_f1_mean={result.metrics['cv_f1_mean']:.6f}")
+    promoted_variant = summary.loc[summary["is_promoted"], "variant"].iloc[0]
+    print("Resumo das runs registradas no MLflow:")
+    print(summary.to_string(index=False))
     print()
-    print(f"Variante promovida: {PRODUCTION_VARIANT.variant_name}")
+    print(f"Variante promovida: {promoted_variant}")
 
 
 if __name__ == "__main__":

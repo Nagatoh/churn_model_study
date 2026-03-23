@@ -23,10 +23,12 @@ dependencies = [
     "scikit-learn>=1.6.1",
     "seaborn>=0.13.2",
     "uvicorn>=0.32.0",
+    "xgboost>=2.1.4",
 ]
 
 [project.scripts]
 churn-train = "churn_model.train:main"
+churn-experiment = "churn_model.experiment:main"
 churn-predict = "churn_model.predict:main"
 churn-serve = "churn_model.serve:main"
 

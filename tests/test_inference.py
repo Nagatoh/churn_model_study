@@ -31,7 +31,8 @@ def test_predict_records_uses_promoted_threshold(
 ) -> None:
     artifact = PersistedModel(
         model=FakeProbabilityModel(),
-        variant_name="without_tenure_group",
+        variant_name="logreg_without_tenure_group",
+        model_family="logistic_regression",
         include_tenure_group=True,
         threshold=0.60,
         dataset_hash="abc123",
@@ -45,5 +46,5 @@ def test_predict_records_uses_promoted_threshold(
     assert len(predictions) == 1
     assert predictions[0].churn_prediction == 1
     assert predictions[0].threshold == 0.60
-    assert predictions[0].variant_name == "without_tenure_group"
+    assert predictions[0].variant_name == "logreg_without_tenure_group"
     assert predictions[0].dataset_hash == "abc123"

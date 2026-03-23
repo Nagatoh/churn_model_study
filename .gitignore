@@ -10,7 +10,7 @@ build/
 dist/
 *.egg-info/
 .eggs/
-
+*.json
 # Virtual environments
 .venv/
 venv/
